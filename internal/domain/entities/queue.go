@@ -4,26 +4,26 @@ package entities
 import "time"
 
 type QueueMessage struct {
-	id  				string
+	ID  				string
 	QueueId             string
-	data   				any
-	visibleAt 			time.Time
-	consumptionStatus  	ConsumptionStatus
-	retryCount  		string
+	Data   				any
+	VisibleAt 			time.Time
+	ConsumptionStatus  	ConsumptionStatus
+	RetryCount  		string
 }
 
 type Queue struct {
-	id                  string
-	name      			string
-	location  			string
-	consumptionRetries  int
-	maxConsumers		int  // at max these many consumers can consume from the queue
-	messages            QueueMessage
+	ID                  string
+	Name      			string
+	Location  			string
+	ConsumptionRetries  int
+	MaxConsumers		int  // at max these many consumers can consume from the queue
+	Messages            QueueMessage
 }
 
 
 type QueueList struct {
-	list              Queue[]
+	List              Queue[]
 }
 
 

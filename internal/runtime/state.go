@@ -26,7 +26,7 @@ func InitiateQueues() *QueueList {
 func CreateNewQueue(queueProperties Queue) string {
 
 	queueId := GenerateUnique()
-	queueProperties.id = queueId
+	queueProperties.ID = queueId
 	Queues = append(Queues, &queueProperties)
 
 	return queueId
@@ -59,9 +59,9 @@ func AddQueueMessage(id string, messageProperties QueueMessage) string, error {
 	}
 
 	messageId := GenerateUnique()
-	messageProperties.id = messageId
+	messageProperties.ID = messageId
 	messageProperties.ConsumptionStatus = 'PENDING'
-	messageProperties.visibleAt = NormalizeInt(messageProperties.visibleAt)
+	messageProperties.VisibleAt = NormalizeInt(messageProperties.VisibleAt)
 
 
 	queue = append(queue, messageProperties)
@@ -81,14 +81,14 @@ func GetMaturedMessages(id string) QueueMessage, err {
 	var message QueueMessage
 
 	for _, msg := range queue {
-		if msg.visibleAt < time.Now() && msg.consumptionStatus === ConsumptionPending && msg.retryCount < queue.consumptionRetries {
+		if msg.VisibleAt < time.Now() && msg.ConsumptionStatus === ConsumptionPending && msg.RetryCount < queue.ConsumptionRetries {
 			message = msg
 			break
 		}
 	}
 
 	if message != nil {
-		message.retryCount++
+		message.RetryCount++
 	}
 
 	return msg, nil
@@ -110,10 +110,10 @@ func MarkConsumptionFailed(id string) string, err {
 		return nil, err
 	}
 
-	if msg.retryCount >= queue.consumptionRetries {
-		msg.consumptionStatus = ConsumptionFailed
+	if msg.RetryCount >= queue.ConsumptionRetries {
+		msg.ConsumptionStatus = ConsumptionFailed
 	} else {
-		msg.consumptionStatus = ConsumptionPending
+		msg.ConsumptionStatus = ConsumptionPending
 	}
 
 	return "SUCCESS", nil
@@ -134,7 +134,7 @@ func MarkMessageConsumed(id string) string, err {
 		return nil, err
 	}
 
-	msg.consumptionStatus = ConsumptionComplete
+	msg.ConsumptionStatus = ConsumptionComplete
 	
 
 	return "SUCCESS", nil
