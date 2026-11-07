@@ -1,7 +1,9 @@
 package utility
 
+import "time"
+
 func NormalizeInt(val int) int {
-	if val == nil {
+	if val < 0 {
 		return 0
 	}
 
@@ -10,7 +12,7 @@ func NormalizeInt(val int) int {
 
 func NormalizeTime(val time.Time) time.Time {
 
-	if val == nil {
+	if val.IsZero() {
 		return time.Now()
 	}
 

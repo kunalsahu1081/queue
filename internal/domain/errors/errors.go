@@ -35,6 +35,10 @@ func QueueNotFound(msg string, err error) error {
 	return &AppError{Code: CodeNotFound, Message: msg, Err: err}
 }
 
+func MessageNotFound(msg string, err error) error {
+	return &AppError{Code: CodeNotFound, Message: msg, Err: err}
+}
+
 func UpdateMergeFailed(msg string, err error) error {
 	return &AppError{Code: CodeUpdateMergeFailed, Message: msg, Err: err}
 }
