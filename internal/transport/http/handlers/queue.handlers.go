@@ -11,10 +11,13 @@ import (
 )
 
 type QueueHandler struct {
+	
 }
 
 func NewQueueHandler() *QueueHandler {
-	return &QueueHandler{}
+	return &QueueHandler{
+		
+	}
 }
 
 // list all queues

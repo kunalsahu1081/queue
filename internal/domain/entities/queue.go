@@ -2,7 +2,7 @@ package entities
 
 import (
 	"dario.cat/mergo"
-
+	"sync"
 	qerrors "letsgo/internal/domain/errors"
 	utility "letsgo/internal/utilities"
 )
@@ -14,7 +14,11 @@ type Queue struct {
 	ConsumptionRetries int    `json:"consumptionRetries"`
 	MaxConsumers       int    `json:"maxConsumers"` // at max these many consumers can consume from the queue
 	messages           []*QueueMessage
+	mu                 sync.Mutex
 }
+
+// guards QueueIdMap and Queues
+var QueueRWlock sync.RWMutex
 
 type QueueList []*Queue
 
@@ -38,29 +42,35 @@ func GetQueues() []*Queue {
 
 func GetQueue(id string) (*Queue, error) {
 
-	return checkQueueExists(id)
+	return CheckQueueExists(id)
 
 }
 
-func CreateNewQueue(queueProperties Queue) string {
+func CreateNewQueue(queueProperties *Queue) string {
+
+	QueueRWlock.Lock()
+	defer QueueRWlock.Unlock()
 
 	queueId := utility.GenerateUnique()
 	queueProperties.ID = queueId
 	queueProperties.messages = []*QueueMessage{}
 
-	Queues = append(Queues, &queueProperties)
-	QueueIdMap[queueId] = &queueProperties
+	Queues = append(Queues, queueProperties)
+	QueueIdMap[queueId] = queueProperties
 
 	return queueId
 }
 
-func UpdateQueue(id string, queueProperties Queue) (string, error) {
+func UpdateQueue(id string, queueProperties *Queue) (string, error) {
 
-	queue, err := checkQueueExists(id)
+	queue, err := CheckQueueExists(id)
 
 	if err != nil {
 		return "", err
 	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
 
 	// never let an update change the id; empty fields are skipped by mergo
 	queueProperties.ID = ""
@@ -76,11 +86,20 @@ func UpdateQueue(id string, queueProperties Queue) (string, error) {
 
 func DeleteQueue(id string) (string, error) {
 
-	queue, err := checkQueueExists(id)
+	queue, err := CheckQueueExists(id)
 
 	if err != nil {
 		return "", err
 	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
+	QueueRWlock.Lock()
+	defer QueueRWlock.Unlock()
+
+	MessageRWlock.Lock()
+	defer MessageRWlock.Unlock()
 
 	for _, msg := range queue.messages {
 		delete(MessageIdMap, msg.ID)
@@ -99,7 +118,11 @@ func DeleteQueue(id string) (string, error) {
 
 }
 
-func checkQueueExists(id string) (*Queue, error) {
+func CheckQueueExists(id string) (*Queue, error) {
+
+	QueueRWlock.RLock()
+	defer QueueRWlock.RUnlock()
+
 	queue, ok := QueueIdMap[id]
 
 	if !ok {

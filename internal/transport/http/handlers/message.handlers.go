@@ -98,3 +98,51 @@ func (h *MessageHandler) DeleteMessageHandler(w http.ResponseWriter, r *http.Req
 		"status": result,
 	})
 }
+
+// take the next matured message; 204 when nothing is ready
+func (h *MessageHandler) ReceiveMessageHandler(w http.ResponseWriter, r *http.Request) {
+
+	message, err := service.GetMaturedMessageService(r.PathValue("id"))
+
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if message == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, message)
+}
+
+// acknowledge successful consumption
+func (h *MessageHandler) AckMessageHandler(w http.ResponseWriter, r *http.Request) {
+
+	result, err := service.MarkMessageConsumedService(r.PathValue("messageId"))
+
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": result,
+	})
+}
+
+// report failed consumption: message is retried, or FAILED once retries are exhausted
+func (h *MessageHandler) FailMessageHandler(w http.ResponseWriter, r *http.Request) {
+
+	result, err := service.MarkConsumptionFailedService(r.PathValue("messageId"))
+
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": result,
+	})
+}

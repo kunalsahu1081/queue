@@ -2,7 +2,7 @@ package entities
 
 import (
 	"time"
-
+	"sync"
 	qerrors "letsgo/internal/domain/errors"
 	utility "letsgo/internal/utilities"
 )
@@ -14,7 +14,11 @@ type QueueMessage struct {
 	visibleAt         time.Time
 	consumptionStatus ConsumptionStatus
 	retryCount        int
+	mu                sync.Mutex // guards Data only; status fields are guarded by the queue lock
 }
+
+// guards MessageIdMap
+var MessageRWlock sync.RWMutex
 
 type ConsumptionStatus string
 
@@ -30,13 +34,19 @@ var MessageIdMap = map[string]*QueueMessage{}
 
 // ---------- CRUD ----------
 
-func AddQueueMessage(id string, messageProperties QueueMessage, delay time.Duration) (string, error) {
+func AddQueueMessage(id string, messageProperties *QueueMessage, delay time.Duration) (string, error) {
 
-	queue, err := checkQueueExists(id)
+	queue, err := CheckQueueExists(id)
 
 	if err != nil {
 		return "", err
 	}
+
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
+	MessageRWlock.Lock()
+	defer MessageRWlock.Unlock()
 
 	messageId := utility.GenerateUnique()
 	messageProperties.ID = messageId
@@ -44,8 +54,8 @@ func AddQueueMessage(id string, messageProperties QueueMessage, delay time.Durat
 	messageProperties.consumptionStatus = ConsumptionPending
 	messageProperties.visibleAt = time.Now().Add(delay)
 
-	queue.messages = append(queue.messages, &messageProperties)
-	MessageIdMap[messageId] = &messageProperties
+	queue.messages = append(queue.messages, messageProperties)
+	MessageIdMap[messageId] = messageProperties
 
 	return messageId, nil
 
@@ -53,7 +63,7 @@ func AddQueueMessage(id string, messageProperties QueueMessage, delay time.Durat
 
 func GetQueueMessages(queueId string) ([]*QueueMessage, error) {
 
-	queue, err := checkQueueExists(queueId)
+	queue, err := CheckQueueExists(queueId)
 
 	if err != nil {
 		return nil, err
@@ -65,7 +75,13 @@ func GetQueueMessages(queueId string) ([]*QueueMessage, error) {
 
 func GetQueueMessage(queueId string, messageId string) (*QueueMessage, error) {
 
-	return checkMessageInQueue(queueId, messageId)
+	msg, err := checkMessageInQueue(queueId, messageId)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return copyMessage(msg), nil
 
 }
 
@@ -77,6 +93,9 @@ func UpdateQueueMessage(queueId string, messageId string, data any) (string, err
 		return "", err
 	}
 
+	msg.mu.Lock()
+	defer msg.mu.Unlock()
+
 	msg.Data = data
 
 	return "UPDATE_SUCCESSFUL", nil
@@ -85,13 +104,16 @@ func UpdateQueueMessage(queueId string, messageId string, data any) (string, err
 
 func DeleteQueueMessage(queueId string, messageId string) (string, error) {
 
-	msg, err := checkMessageInQueue(queueId, messageId)
+	queue, err := CheckQueueExists(queueId)
 
 	if err != nil {
 		return "", err
 	}
 
-	queue, err := checkQueueExists(msg.QueueId)
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
+	_, err = checkMessageInQueue(queueId, messageId)
 
 	if err != nil {
 		return "", err
@@ -104,36 +126,54 @@ func DeleteQueueMessage(queueId string, messageId string) (string, error) {
 		}
 	}
 
+	MessageRWlock.Lock()
+	defer MessageRWlock.Unlock()
+
 	delete(MessageIdMap, messageId)
 
 	return "DELETE_SUCCESSFUL", nil
 
 }
 
-// ---------- consumption (yours to finish) ----------
+
 
 func GetMaturedMessages(id string) (*QueueMessage, error) {
 
-	queue, err := checkQueueExists(id)
+	
+	queue, err := CheckQueueExists(id)
 
 	if err != nil {
 		return nil, err
 	}
 
+	queue.mu.Lock() 
+	defer queue.mu.Unlock()
+
 	var message *QueueMessage
+	inFlight := 0
 
 	for _, msg := range queue.messages {
-		if !time.Now().Before(msg.visibleAt) && msg.consumptionStatus == ConsumptionPending && msg.retryCount < queue.ConsumptionRetries {
-			message = msg
-			break
+		if msg.consumptionStatus == ConsumptionProcessing {
+			inFlight++
 		}
+
+		if message == nil && !time.Now().Before(msg.visibleAt) && msg.consumptionStatus == ConsumptionPending && msg.retryCount < queue.ConsumptionRetries {
+			message = msg
+		}
+	}
+
+	// MaxConsumers <= 0 means no limit; at capacity nothing is handed out
+	if queue.MaxConsumers > 0 && inFlight >= queue.MaxConsumers {
+		return nil, nil
 	}
 
 	if message != nil {
 		message.retryCount++
+		message.consumptionStatus = ConsumptionProcessing
+		return copyMessage(message), nil
 	}
 
-	return message, nil
+	return nil, nil
 
 }
 
@@ -145,11 +185,20 @@ func MarkConsumptionFailed(id string) (string, error) {
 		return "", err
 	}
 
-	queue, err := checkQueueExists(msg.QueueId)
+	queue, err := CheckQueueExists(msg.QueueId)
 
 	if err != nil {
 		return "", err
 	}
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
+	msg, err = checkMessageExists(id)
+
+	if err != nil {
+		return "", err
+	}
+
 
 	if msg.retryCount >= queue.ConsumptionRetries {
 		msg.consumptionStatus = ConsumptionFailed
@@ -169,7 +218,15 @@ func MarkMessageConsumed(id string) (string, error) {
 		return "", err
 	}
 
-	_, err = checkQueueExists(msg.QueueId)
+	queue, err := CheckQueueExists(msg.QueueId)
+
+	if err != nil {
+		return "", err
+	}
+	queue.mu.Lock()
+	defer queue.mu.Unlock()
+
+	msg, err = checkMessageExists(id)
 
 	if err != nil {
 		return "", err
@@ -181,7 +238,21 @@ func MarkMessageConsumed(id string) (string, error) {
 
 }
 
+// snapshot of the exported fields; Data is read under the message lock
+func copyMessage(msg *QueueMessage) *QueueMessage {
+
+	msg.mu.Lock()
+	defer msg.mu.Unlock()
+
+	return &QueueMessage{ID: msg.ID, QueueId: msg.QueueId, Data: msg.Data}
+
+}
+
 func checkMessageExists(id string) (*QueueMessage, error) {
+
+	MessageRWlock.RLock()
+	defer MessageRWlock.RUnlock()
+
 	message, ok := MessageIdMap[id]
 
 	if !ok {
@@ -194,7 +265,7 @@ func checkMessageExists(id string) (*QueueMessage, error) {
 // a message id is only valid under the queue it belongs to
 func checkMessageInQueue(queueId string, messageId string) (*QueueMessage, error) {
 
-	if _, err := checkQueueExists(queueId); err != nil {
+	if _, err := CheckQueueExists(queueId); err != nil {
 		return nil, err
 	}
 

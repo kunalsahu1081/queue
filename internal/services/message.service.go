@@ -17,7 +17,7 @@ type UpdateMessageRequest struct {
 
 func AddMessageService(queueId string, mp AddMessageRequest) (string, error) {
 
-	message := entities.QueueMessage{
+	message := &entities.QueueMessage{
 		Data: mp.Data,
 	}
 
@@ -48,5 +48,24 @@ func UpdateMessageService(queueId string, messageId string, mp UpdateMessageRequ
 func DeleteMessageService(queueId string, messageId string) (string, error) {
 
 	return entities.DeleteQueueMessage(queueId, messageId)
+
+}
+
+// returns the next matured message, or nil when none is ready
+func GetMaturedMessageService(queueId string) (*entities.QueueMessage, error) {
+
+	return entities.GetMaturedMessages(queueId)
+
+}
+
+func MarkMessageConsumedService(messageId string) (string, error) {
+
+	return entities.MarkMessageConsumed(messageId)
+
+}
+
+func MarkConsumptionFailedService(messageId string) (string, error) {
+
+	return entities.MarkConsumptionFailed(messageId)
 
 }

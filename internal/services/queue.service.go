@@ -14,7 +14,7 @@ type CreateQueueRequest struct {
 
 func CreateQueueService(qp CreateQueueRequest) (string, error) {
 
-	queue := entities.Queue{
+	queue := &entities.Queue{
 		Name:               qp.Name,
 		Location:           qp.Location,
 		ConsumptionRetries: qp.ConsumptionRetries,
@@ -29,7 +29,7 @@ func CreateQueueService(qp CreateQueueRequest) (string, error) {
 
 func UpdateQueueService(id string, qp CreateQueueRequest) (string, error) {
 
-	queue := entities.Queue{
+	queue := &entities.Queue{
 		Name:               qp.Name,
 		Location:           qp.Location,
 		ConsumptionRetries: qp.ConsumptionRetries,
