@@ -9,7 +9,6 @@ type CreateQueueRequest struct {
 	Name               string `json:"name"`
 	Location           string `json:"location"`
 	ConsumptionRetries int    `json:"consumptionRetries"`
-	MaxConsumers       int    `json:"maxConsumers"`
 }
 
 func CreateQueueService(qp CreateQueueRequest) (string, error) {
@@ -18,7 +17,6 @@ func CreateQueueService(qp CreateQueueRequest) (string, error) {
 		Name:               qp.Name,
 		Location:           qp.Location,
 		ConsumptionRetries: qp.ConsumptionRetries,
-		MaxConsumers:       qp.MaxConsumers,
 	}
 
 	queueId := entities.CreateNewQueue(queue)
@@ -33,7 +31,6 @@ func UpdateQueueService(id string, qp CreateQueueRequest) (string, error) {
 		Name:               qp.Name,
 		Location:           qp.Location,
 		ConsumptionRetries: qp.ConsumptionRetries,
-		MaxConsumers:       qp.MaxConsumers,
 	}
 
 	result, err := entities.UpdateQueue(id, queue)

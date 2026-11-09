@@ -146,19 +146,6 @@ func GetMaturedMessages(id string) (*QueueMessage, error) {
 		return nil, err
 	}
 
-	// count this consumer as live before waiting for the queue lock, so waiters count too
-	// MaxConsumers <= 0 means no limit; over the limit nothing is handed out
-	queue.cfgMu.RLock()
-	maxConsumers := queue.MaxConsumers
-	queue.cfgMu.RUnlock()
-
-	live := queue.activeConsumers.Add(1)
-	defer queue.activeConsumers.Add(-1)
-
-	if maxConsumers > 0 && int(live) > maxConsumers {
-		return nil, nil
-	}
-
 	queue.mu.Lock()
 	defer queue.mu.Unlock()
 

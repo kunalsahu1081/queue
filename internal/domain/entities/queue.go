@@ -3,7 +3,6 @@ package entities
 import (
 	"dario.cat/mergo"
 	"sync"
-	"sync/atomic"
 	qerrors "letsgo/internal/domain/errors"
 	utility "letsgo/internal/utilities"
 )
@@ -13,11 +12,8 @@ type Queue struct {
 	Name               string `json:"name"`
 	Location           string `json:"location"`
 	ConsumptionRetries int    `json:"consumptionRetries"`
-	MaxConsumers       int    `json:"maxConsumers"` // at max these many consumers can consume from the queue
 	messages           []*QueueMessage
 	mu                 sync.Mutex
-	cfgMu              sync.RWMutex // guards MaxConsumers, which is read outside mu
-	activeConsumers    atomic.Int32 // receive calls currently live on this queue
 }
 
 // guards QueueIdMap and Queues
@@ -77,9 +73,7 @@ func UpdateQueue(id string, queueProperties *Queue) (string, error) {
 
 	// never let an update change the id; empty fields are skipped by mergo
 	queueProperties.ID = ""
-	queue.cfgMu.Lock()
 	err = mergo.Merge(queue, queueProperties, mergo.WithOverride)
-	queue.cfgMu.Unlock()
 
 	if err != nil {
 		return "UPDATE_MERGE_FAILED", qerrors.UpdateMergeFailed("Queue merge failed", err)
