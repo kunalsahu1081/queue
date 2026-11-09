@@ -146,25 +146,29 @@ func GetMaturedMessages(id string) (*QueueMessage, error) {
 		return nil, err
 	}
 
-	queue.mu.Lock() 
+	// count this consumer as live before waiting for the queue lock, so waiters count too
+	// MaxConsumers <= 0 means no limit; over the limit nothing is handed out
+	queue.cfgMu.RLock()
+	maxConsumers := queue.MaxConsumers
+	queue.cfgMu.RUnlock()
+
+	live := queue.activeConsumers.Add(1)
+	defer queue.activeConsumers.Add(-1)
+
+	if maxConsumers > 0 && int(live) > maxConsumers {
+		return nil, nil
+	}
+
+	queue.mu.Lock()
 	defer queue.mu.Unlock()
 
 	var message *QueueMessage
-	inFlight := 0
 
 	for _, msg := range queue.messages {
-		if msg.consumptionStatus == ConsumptionProcessing {
-			inFlight++
-		}
-
-		if message == nil && !time.Now().Before(msg.visibleAt) && msg.consumptionStatus == ConsumptionPending && msg.retryCount < queue.ConsumptionRetries {
+		if !time.Now().Before(msg.visibleAt) && msg.consumptionStatus == ConsumptionPending && msg.retryCount < queue.ConsumptionRetries {
 			message = msg
+			break
 		}
-	}
-
-	// MaxConsumers <= 0 means no limit; at capacity nothing is handed out
-	if queue.MaxConsumers > 0 && inFlight >= queue.MaxConsumers {
-		return nil, nil
 	}
 
 	if message != nil {
