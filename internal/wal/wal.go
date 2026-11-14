@@ -14,14 +14,26 @@ import (
 const MaxFileSize int64 = 16 * 1024 * 1024 // 16 MB
 const MaxBatchSize int64 = 4 * 1024 * 1024 // 4 MB
 
+type iPayload struct {
+	id    		string
+	payload  	[]bytes
+}
+
+type wResult struct {
+	Value      int
+	err        error
+}
+
 type wal struct {
 	filePath     string
 	Segment      int64
 	batchExec    *time.Timer
-	batch        [][]bytes
+	batch        []iPayload
 	batchSize    int64
 	mu 			 sync.Mutex
 	wLock		 sync.Mutex
+	pAck         map[string]wResult
+	mapUpdate    sync.Mutex
 }
 
 
@@ -32,7 +44,7 @@ func (* wal) CanInsert(dataSize int64) bool, error {
 	info, err := os.Stat(filePath)
 
 	if os.IsNotExist(err) {
-		err :=  CreateNextFile()
+		err :=  wal.CreateNextFile()
 		return false, err
 	}
 
@@ -46,13 +58,13 @@ func (* wal) CanInsert(dataSize int64) bool, error {
     }
 
 
-	newFileSize := currentSize + dataSize + 8
+	newFileSize := currentSize + dataSize
 
 	if newFileSize >= MaxFileSize {
-		err = CreateNextFile()
+		err = wal.CreateNextFile()
 	}
 
-    return newFileSize >= MaxFileSize, err
+    return newFileSize < MaxFileSize, err
 }
 
 func (* wal) CreateNextFile() error {
@@ -73,24 +85,29 @@ func (* wal) CreateNextFile() error {
 func (* wal) RefreshBatch() error {
 
 	wal.mu.Lock()
-	wal.RefreshBatchIn()
+	
+	if wal.batchExec != nil {
+		wal.batchExec.Stop()
+	}
 
-}
-
-func (* wal) RefreshBatchIn() error {
-
-	wal.batchExec = nil
 	currBatch := wal.batch 
 	wal.batch = [][]bytes{}
 	wal.batchSize = 0
+
+	wal.batchExec = time.AfterFunc(5*time.Second, wal.RefreshBatch)
+
 	wal.wLock.Lock()
 	defer wal.wLock.Unlock()
-	wal.mu.Unlock()
-	BulkWrite(currBatch)
 
+	wal.isFlusing = false
+	wal.mu.Unlock()
+
+	wal.BulkWrite(currBatch)
 }
 
-func (* wal) BulkWrite(batch [][]bytes) []error, error {
+
+
+func (* wal) BulkWrite(batch []iPayload) error {
 
 	var wError []error
 
@@ -103,29 +120,72 @@ func (* wal) BulkWrite(batch [][]bytes) []error, error {
 
 	writer := bufio.NewWriter(file)
 
+	sizeTillNow := 0
+	flushTill := len(batch)
 
-	for _, data := range batch {
 
-		ok, ierr := CanInsert(int64(len(data)))
+	for i, data := range batch {
+
+		ok, ierr := wal.CanInsert(int64(sizeTillNow + len(data.payload)))
+		sizeTillNow += len(data.payload)
 
 		if ierr != nil {
-			wError = append(wError, err)
+			return ierr
 		}
 
 		if !ok {
-			
+			flushTill = i
+			break
 		}
+		
+	}
 
-		_, err := writer.Write(data)
-		wError = append(wError, err)
+	writeErrs = []error{}
+
+	for i := 0; i < flushTill; i++ {
+
+		data := batch[i]
+
+		_, err := writer.Write(data.payload)
+
+		if err != nil {
+			writeErrs.append(err)
+		} else {
+			writeErrs.append(nil)
+		}
 
 	}
 
 	if err := writer.Flush(); err != nil {
-		return []error{}, err
+		return err
 	}
 
-	return wError, nil
+	if err := file.Sync(); err != nil {
+		return err
+	}
+
+	wal.mapUpdate.Lock()
+	for i := 0; i < flushTill; i++ {
+		data := batch[i]
+
+		result := wal.pAck[data.id]
+
+		if writeErrs[i] != nil {
+			result.Value = 1
+			result.err = writeErrs[i]
+		} else {
+			result.Value = 2
+		}
+
+		wal.pAck[data.id] = result
+	}
+	wal.mapUpdate.Unlock()
+
+	if flushTill < len(batch) {
+		return BulkWrite(batch[flushTill : len(batch)])
+	}
+
+	return nil
 
 }
 
@@ -133,20 +193,28 @@ func (* wal) Append(payload any) error {
 
 	bytes, err := prepare(payload)
 
-	wal.mu.Lock()
-	if wal.batchExec == nil {
-		wal.batchExec = time.AfterFunc(5*time.Second, wal.RefreshBatch)
+	if err != nil {
+		return err
 	}
 
-	wal.batch = append(wal.batch, bytes)
+	wal.mu.Lock()
+
+	wal.batch = append(wal.batch, iPayload{id: payload.id, payload: bytes})
 	wal.batchSize += int64(len(bytes))
 
-	if wal.batchSize >= MaxFileSize {
-		wal.batchExec.Stop()
-		wal.RefreshBatchIn()
-	} else {
-		wal.mu.Unlock()
+	wal.mapUpdate.Lock()
+	wal.pAck[payload.id] = wResult{
+		Value: 0
+		err:   nil
 	}
+	wal.mapUpdate.Unlock()
+
+	if wal.batchSize >= MaxBatchSize {
+		defer wal.RefreshBatch()
+	} 
+	
+	wal.mu.Unlock()
+	
 
 }
 
@@ -208,6 +276,10 @@ func Init() string {
 
 		return "SUCCESSFUL"
 
+	}
+
+	if wal.batchExec == nil {
+		wal.batchExec = time.AfterFunc(5*time.Second, wal.RefreshBatch)
 	}
 
 	if err != nil {
