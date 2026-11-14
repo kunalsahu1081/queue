@@ -6,7 +6,7 @@ import (
     "encoding/json"
     "fmt"
     "hash/crc32"
-	"encoding/binary"
+	"bufio"
 	"time"
 	"sync"
 )
@@ -16,7 +16,7 @@ const MaxBatchSize int64 = 4 * 1024 * 1024 // 4 MB
 
 type iPayload struct {
 	id    		string
-	payload  	[]bytes
+	payload  	[]byte
 }
 
 type wResult struct {
@@ -37,7 +37,7 @@ type wal struct {
 }
 
 
-func (* wal) CanInsert(dataSize int64) bool, error {
+func (wal *wal) CanInsert(dataSize int64) (bool, error) {
 
 	filePath := wal.filePath
 
@@ -67,22 +67,31 @@ func (* wal) CanInsert(dataSize int64) bool, error {
     return newFileSize < MaxFileSize, err
 }
 
-func (* wal) CreateNextFile() error {
+func (wal *wal) CreateNextFile() error {
 
-	path := "../data/wal/" + fmt.Sprintf("%10d", wal.Segment + 1)
+	path := "../data/wal/" + fmt.Sprintf("%010d", wal.Segment + 1)
 
-	newFile := file, err := os.OpenFile(
+	file, err := os.OpenFile(
 		path,
 		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
 		0644,
 	)
 
+	if err != nil {
+		return err
+	}
+
+	if err := file.Close(); err != nil {
+		return err
+	}
+
 	wal.filePath = path
 	wal.Segment++
 
+	return nil
 }
 
-func (* wal) RefreshBatch() error {
+func (wal *wal) RefreshBatch() error {
 
 	wal.mu.Lock()
 	
@@ -91,30 +100,27 @@ func (* wal) RefreshBatch() error {
 	}
 
 	currBatch := wal.batch 
-	wal.batch = [][]bytes{}
+	wal.batch = []iPayload{}
 	wal.batchSize = 0
 
-	wal.batchExec = time.AfterFunc(5*time.Second, wal.RefreshBatch)
+	wal.batchExec = time.AfterFunc(5*time.Second, func() { wal.RefreshBatch() })
 
 	wal.wLock.Lock()
 	defer wal.wLock.Unlock()
 
-	wal.isFlusing = false
 	wal.mu.Unlock()
 
-	wal.BulkWrite(currBatch)
+	return wal.BulkWrite(currBatch)
 }
 
 
 
-func (* wal) BulkWrite(batch []iPayload) error {
-
-	var wError []error
+func (wal *wal) BulkWrite(batch []iPayload) error {
 
 	file, err := os.OpenFile(wal.filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644 )
 
 	if err != nil {
-		return []error{}, err
+		return err
 	}
 	defer file.Close()
 
@@ -140,7 +146,7 @@ func (* wal) BulkWrite(batch []iPayload) error {
 		
 	}
 
-	writeErrs = []error{}
+	writeErrs := []error{}
 
 	for i := 0; i < flushTill; i++ {
 
@@ -149,9 +155,9 @@ func (* wal) BulkWrite(batch []iPayload) error {
 		_, err := writer.Write(data.payload)
 
 		if err != nil {
-			writeErrs.append(err)
+			writeErrs = append(writeErrs, err)
 		} else {
-			writeErrs.append(nil)
+			writeErrs = append(writeErrs, nil)
 		}
 
 	}
@@ -182,16 +188,16 @@ func (* wal) BulkWrite(batch []iPayload) error {
 	wal.mapUpdate.Unlock()
 
 	if flushTill < len(batch) {
-		return BulkWrite(batch[flushTill : len(batch)])
+		return wal.BulkWrite(batch[flushTill : len(batch)])
 	}
 
 	return nil
 
 }
 
-func (* wal) Append(payload any) error {
+func (wal *wal) Append(id string, payload any) error {
 
-	bytes, err := prepare(payload)
+	bytes, err := wal.prepare(payload)
 
 	if err != nil {
 		return err
@@ -199,13 +205,13 @@ func (* wal) Append(payload any) error {
 
 	wal.mu.Lock()
 
-	wal.batch = append(wal.batch, iPayload{id: payload.id, payload: bytes})
+	wal.batch = append(wal.batch, iPayload{id: id, payload: bytes})
 	wal.batchSize += int64(len(bytes))
 
 	wal.mapUpdate.Lock()
-	wal.pAck[payload.id] = wResult{
-		Value: 0
-		err:   nil
+	wal.pAck[id] = wResult{
+		Value: 0,
+		err:   nil,
 	}
 	wal.mapUpdate.Unlock()
 
@@ -214,12 +220,12 @@ func (* wal) Append(payload any) error {
 	} 
 	
 	wal.mu.Unlock()
-	
 
+	return nil
 }
 
 
-func (* wal) prepare(payload any) []byte, error {
+func (wal *wal) prepare(payload any) ([]byte, error) {
 
 	data, err := json.Marshal(payload)
 
@@ -229,7 +235,7 @@ func (* wal) prepare(payload any) []byte, error {
 
 	length := uint32(len(data))
 
-	if uint64(length) > uint64(MaxFileSize) {
+	if uint64(length)+8 >= uint64(MaxFileSize) {
 		return []byte{}, fmt.Errorf("payload exceeds maximum file size")
 	}
 
@@ -246,6 +252,8 @@ func (* wal) prepare(payload any) []byte, error {
 		crc32.MakeTable(crc32.Castagnoli),
 	)
 
+	checksumBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(checksumBytes, checksum)
 
 	record := make([]byte, 0, 8+len(data))
     record = append(record, lengthBytes...)
@@ -260,11 +268,15 @@ func (* wal) prepare(payload any) []byte, error {
 
 
 
-func Init() string {
+func (wal *wal) Init() string {
+
+	if wal.pAck == nil {
+		wal.pAck = map[string]wResult{}
+	}
 
 	dir := "../data/wal"
 
-	info, err := os.Stat(dir)
+	_, err := os.Stat(dir)
 
 	if os.IsNotExist(err) {
 
@@ -279,7 +291,7 @@ func Init() string {
 	}
 
 	if wal.batchExec == nil {
-		wal.batchExec = time.AfterFunc(5*time.Second, wal.RefreshBatch)
+		wal.batchExec = time.AfterFunc(5*time.Second, func() { wal.RefreshBatch() })
 	}
 
 	if err != nil {
